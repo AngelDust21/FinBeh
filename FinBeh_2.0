@@ -1,0 +1,568 @@
+import tkinter as tk
+import ttkbootstrap as ttk
+from ttkbootstrap.constants import *
+from tkinter import messagebox, filedialog, simpledialog
+from PIL import Image, ImageTk  # Voor afbeeldingen
+import pandas as pd
+from datetime import datetime
+import os
+import bcrypt
+import base64
+import matplotlib.pyplot as plt
+from colorama import init, Fore, Style
+
+
+# Initialize colorama
+init(autoreset=True)
+
+BESTANDSNAAM = "historiek.txt"
+GEBRUIKERSBESTAND = "gebruikers.txt"
+SETTINGS_FILE = "settings.txt"
+BUDGET_FILE = "budgetten.txt"
+
+# Standaard instellingen
+settings = {
+    "input_color": "green",
+    "grid_style": "fancy_grid",
+    "intro_title": "Financieel Beheer",
+    "intro_color": "cyan",
+    "show_intro": "True"
+}
+
+COLOR_OPTIONS = {
+    "green": "green",
+    "blue": "blue",
+    "yellow": "yellow",
+    "red": "red",
+    "cyan": "cyan",
+    "white": "white"
+}
+
+GRID_STYLES = ["fancy_grid", "plain", "grid", "pipe"]
+
+# Globale variabelen
+username = None
+historiek = []
+budgetten = {}
+
+# Functies voor wachtwoordhashing met bcrypt
+def hash_wachtwoord(wachtwoord):
+    salt = bcrypt.gensalt()
+    hashed = bcrypt.hashpw(wachtwoord.encode('utf-8'), salt)
+    return hashed
+
+def verifieer_wachtwoord(wachtwoord, hashed):
+    return bcrypt.checkpw(wachtwoord.encode('utf-8'), hashed)
+
+def laad_settings():
+    global settings
+    if os.path.exists(SETTINGS_FILE):
+        with open(SETTINGS_FILE, "r") as f:
+            for line in f:
+                if line.strip():
+                    key, value = line.strip().split("=")
+                    settings[key.strip()] = value.strip()
+
+def sla_settings_op():
+    with open(SETTINGS_FILE, "w") as f:
+        for key, value in settings.items():
+            f.write(f"{key}={value}\n")
+
+def laad_gebruikers():
+    gebruikers = {}
+    if os.path.exists(GEBRUIKERSBESTAND):
+        with open(GEBRUIKERSBESTAND, "r") as f:
+            for line in f:
+                if line.strip() == "":
+                    continue
+                try:
+                    gebruiker, hashed_wachtwoord_str = line.strip().split(";")
+                    hashed_wachtwoord = base64.b64decode(hashed_wachtwoord_str)
+                    gebruikers[gebruiker] = hashed_wachtwoord
+                except ValueError:
+                    continue
+    return gebruikers
+
+def sla_gebruikers_op(gebruikers):
+    with open(GEBRUIKERSBESTAND, "w") as f:
+        for gebruiker, hashed_wachtwoord in gebruikers.items():
+            hashed_wachtwoord_str = base64.b64encode(hashed_wachtwoord).decode('utf-8')
+            f.write(f"{gebruiker};{hashed_wachtwoord_str}\n")
+
+def laad_historiek():
+    historiek = []
+    if os.path.exists(BESTANDSNAAM):
+        with open(BESTANDSNAAM, "r") as f:
+            for line in f:
+                if line.strip() == "":
+                    continue
+                parts = line.strip().split(";")
+                if len(parts) != 5:
+                    continue
+                datum_str, oud_saldo, totaal_inkomen, totaal_uitgaven, nieuw_saldo = parts
+                try:
+                    datum = datetime.strptime(datum_str, "%d-%m-%Y").date()
+                    record = {
+                        'Datum': datum,
+                        'Gegevens': {
+                            'Categorie': ['Oud Saldo', 'Totaal Inkomsten', 'Totaal Uitgaven', 'Nieuw Saldo'],
+                            'Bedrag': [float(oud_saldo), float(totaal_inkomen), float(totaal_uitgaven), float(nieuw_saldo)]
+                        }
+                    }
+                    historiek.append(record)
+                except ValueError:
+                    continue
+    return historiek
+
+def sla_historiek_op(historiek):
+    with open(BESTANDSNAAM, "w") as f:
+        for record in historiek:
+            datum_str = record['Datum'].strftime("%d-%m-%Y")
+            gegevens = record['Gegevens']
+            f.write(
+                f"{datum_str};{gegevens['Bedrag'][0]};{gegevens['Bedrag'][1]};{gegevens['Bedrag'][2]};{gegevens['Bedrag'][3]}\n")
+
+def laad_budgetten():
+    budgetten = {}
+    if os.path.exists(BUDGET_FILE):
+        with open(BUDGET_FILE, "r") as f:
+            for line in f:
+                if line.strip():
+                    categorie, bedrag = line.strip().split(";")
+                    budgetten[categorie] = float(bedrag)
+    return budgetten
+
+def sla_budgetten_op(budgetten):
+    with open(BUDGET_FILE, "w") as f:
+        for categorie, bedrag in budgetten.items():
+            f.write(f"{categorie};{bedrag}\n")
+
+def herbereken_saldi(historiek, start_index=0):
+    gesorteerde_historiek = sorted(historiek, key=lambda x: x['Datum'])
+    for i in range(start_index, len(gesorteerde_historiek)):
+        if i == 0:
+            oud_saldo = 0.0
+        else:
+            oud_saldo = gesorteerde_historiek[i - 1]['Gegevens']["Bedrag"][3]
+        totaal_inkomen = gesorteerde_historiek[i]['Gegevens']["Bedrag"][1]
+        totaal_uitgaven = gesorteerde_historiek[i]['Gegevens']["Bedrag"][2]
+        nieuw_saldo = oud_saldo + totaal_inkomen - totaal_uitgaven
+
+        gesorteerde_historiek[i]['Gegevens']["Bedrag"][0] = oud_saldo
+        gesorteerde_historiek[i]['Gegevens']["Bedrag"][3] = nieuw_saldo
+
+# GUI Functies
+
+def start_gui():
+    laad_settings()
+    global budgetten
+    budgetten = laad_budgetten()
+    root = ttk.Window(themename="superhero")  # Kies een thema zoals 'superhero', 'darkly', etc.
+    root.title("Financieel Beheer")
+
+    # Voeg een logo toe als je wilt
+    # Zorg ervoor dat je een afbeelding 'logo.png' hebt in dezelfde map
+    # logo = Image.open("logo.png")
+    # logo = logo.resize((100, 100), Image.ANTIALIAS)
+    # logo_img = ImageTk.PhotoImage(logo)
+    # logo_label = ttk.Label(root, image=logo_img)
+    # logo_label.image = logo_img  # Bewaar een referentie
+    # logo_label.pack(pady=10)
+
+    # Welkomstlabel
+    label = ttk.Label(root, text="Welkom bij Financieel Beheer", font=("Helvetica", 20, "bold"))
+    label.pack(pady=20)
+
+    def open_inlogscherm():
+        root.withdraw()
+        gebruikersbeheer_gui(root)
+
+    # Knoppen met verbeterde stijl
+    ttk.Button(root, text="Inloggen", command=open_inlogscherm, width=20, bootstyle="success-outline").pack(pady=10)
+    ttk.Button(root, text="Afsluiten", command=root.destroy, width=20, bootstyle="danger-outline").pack(pady=10)
+
+    root.mainloop()
+
+
+def gebruikersbeheer_gui(parent):
+    gebruikers = laad_gebruikers()
+    login_window = tk.Toplevel()
+    login_window.title("Gebruikersbeheer")
+
+    tk.Label(login_window, text="Gebruikersnaam:").pack()
+    gebruikersnaam_entry = tk.Entry(login_window)
+    gebruikersnaam_entry.pack()
+
+    tk.Label(login_window, text="Wachtwoord:").pack()
+    wachtwoord_entry = tk.Entry(login_window, show="*")
+    wachtwoord_entry.pack()
+
+    def inloggen():
+        invoernaam = gebruikersnaam_entry.get().strip()
+        wachtwoord = wachtwoord_entry.get().strip()
+        if invoernaam in gebruikers:
+            hashed_wachtwoord = gebruikers[invoernaam]
+            if verifieer_wachtwoord(wachtwoord, hashed_wachtwoord):
+                global username
+                username = invoernaam
+                messagebox.showinfo("Succes", "Inloggen succesvol!")
+                login_window.destroy()
+                start_hoofdmenu_gui(parent)
+            else:
+                messagebox.showerror("Fout", "Ongeldige gebruikersnaam of wachtwoord.")
+        else:
+            messagebox.showerror("Fout", "Ongeldige gebruikersnaam of wachtwoord.")
+
+    def registreren():
+        invoernaam = gebruikersnaam_entry.get().strip()
+        wachtwoord = wachtwoord_entry.get().strip()
+        if invoernaam in gebruikers:
+            messagebox.showerror("Fout", "Gebruikersnaam bestaat al.")
+        else:
+            hashed_wachtwoord = hash_wachtwoord(wachtwoord)
+            gebruikers[invoernaam] = hashed_wachtwoord
+            sla_gebruikers_op(gebruikers)
+            messagebox.showinfo("Succes", "Registratie succesvol!")
+            gebruikersnaam_entry.delete(0, tk.END)
+            wachtwoord_entry.delete(0, tk.END)
+
+    tk.Button(login_window, text="Inloggen", command=inloggen).pack(pady=5)
+    tk.Button(login_window, text="Registreren", command=registreren).pack(pady=5)
+
+def start_hoofdmenu_gui(parent):
+    parent.withdraw()
+    hoofdmenu = tk.Toplevel()
+    hoofdmenu.title(f"Financieel Beheer - Ingelogd als {username}")
+
+    tk.Label(hoofdmenu, text=f"Ingelogd als: {username}", font=("Helvetica", 12)).pack(pady=10)
+
+    tk.Button(hoofdmenu, text="Toon Historiek", command=lambda: toon_historiek_gui(hoofdmenu), width=30).pack(pady=5)
+    tk.Button(hoofdmenu, text="Voeg Nieuwe Dag Toe", command=lambda: voeg_nieuwe_dag_toe_gui(hoofdmenu), width=30).pack(pady=5)
+    tk.Button(hoofdmenu, text="Wijzig Dag", command=lambda: wijzig_dag_gui(hoofdmenu), width=30).pack(pady=5)
+    tk.Button(hoofdmenu, text="Verwijder Dag", command=lambda: verwijder_dag_gui(hoofdmenu), width=30).pack(pady=5)
+    tk.Button(hoofdmenu, text="Toon Samenvatting", command=lambda: toon_samenvatting_gui(hoofdmenu), width=30).pack(pady=5)
+    tk.Button(hoofdmenu, text="Exporteer naar Excel", command=exporteer_naar_excel_gui, width=30).pack(pady=5)
+    tk.Button(hoofdmenu, text="Instellingen", command=beheer_instellingen_gui, width=30).pack(pady=5)
+    tk.Button(hoofdmenu, text="Budgettering", command=beheer_budgetten_gui, width=30).pack(pady=5)
+    tk.Button(hoofdmenu, text="Toon Grafiek", command=toon_grafiek_gui, width=30).pack(pady=5)
+    tk.Button(hoofdmenu, text="Uitloggen", command=lambda: uitloggen(hoofdmenu, parent), width=30).pack(pady=5)
+    tk.Button(hoofdmenu, text="Afsluiten", command=hoofdmenu.destroy, width=30).pack(pady=5)
+
+def uitloggen(current_window, parent):
+    global username
+    username = None
+    current_window.destroy()
+    parent.deiconify()
+
+def toon_historiek_gui(parent):
+    historiek = laad_historiek()
+    if not historiek:
+        messagebox.showinfo("Historiek", "Er zijn nog geen records in de historiek.")
+        return
+
+    historiek_venster = tk.Toplevel()
+    historiek_venster.title("Historiek")
+
+    text_widget = tk.Text(historiek_venster, wrap='none')
+    text_widget.pack(expand=True, fill='both')
+
+    scrollbar = tk.Scrollbar(text_widget)
+    scrollbar.pack(side='right', fill='y')
+    text_widget.config(yscrollcommand=scrollbar.set)
+    scrollbar.config(command=text_widget.yview)
+
+    for record in sorted(historiek, key=lambda x: x['Datum']):
+        datum_str = record['Datum'].strftime('%d-%m-%Y')
+        text_widget.insert('end', f"Datum: {datum_str}\n")
+        gegevens = record['Gegevens']
+        for categorie, bedrag in zip(gegevens['Categorie'], gegevens['Bedrag']):
+            text_widget.insert('end', f"{categorie}: {bedrag}\n")
+        text_widget.insert('end', "\n")
+
+def voeg_nieuwe_dag_toe_gui(parent):
+    invoer_venster = tk.Toplevel()
+    invoer_venster.title("Nieuwe Dag Toevoegen")
+
+    tk.Label(invoer_venster, text="Datum (dd-mm-jjjj):").pack()
+    datum_entry = tk.Entry(invoer_venster)
+    datum_entry.pack()
+
+    inkomsten = {}
+    uitgaven = {}
+
+    def vraag_inkomsten():
+        nonlocal inkomsten
+        inkomsten = vraag_bedragen_gui("inkomsten")
+
+    def vraag_uitgaven():
+        nonlocal uitgaven
+        uitgaven = vraag_bedragen_gui("uitgaven")
+
+    tk.Button(invoer_venster, text="Inkomsten Invoeren", command=vraag_inkomsten).pack(pady=5)
+    tk.Button(invoer_venster, text="Uitgaven Invoeren", command=vraag_uitgaven).pack(pady=5)
+
+    def opslaan():
+        datum_str = datum_entry.get().strip()
+        try:
+            datum = datetime.strptime(datum_str, "%d-%m-%Y").date()
+        except ValueError:
+            messagebox.showerror("Fout", "Ongeldige datum. Gebruik het formaat dd-mm-jjjj.")
+            return
+
+        historiek = laad_historiek()
+        if any(record['Datum'] == datum for record in historiek):
+            messagebox.showerror("Fout", "Er bestaat al een record voor deze datum.")
+            return
+
+        if historiek:
+            laatste_dag = sorted(historiek, key=lambda x: x['Datum'])[-1]
+            oud_saldo = laatste_dag['Gegevens']["Bedrag"][3]
+        else:
+            oud_saldo = simpledialog.askfloat("Oud Saldo", "Voer het oude saldo voor de eerste dag in:", minvalue=0)
+
+        totaal_inkomen = sum(inkomsten.values())
+        totaal_uitgaven = sum(uitgaven.values())
+        nieuw_saldo = oud_saldo + totaal_inkomen - totaal_uitgaven
+
+        record = {
+            'Datum': datum,
+            'Gegevens': {
+                'Categorie': ['Oud Saldo', 'Totaal Inkomsten', 'Totaal Uitgaven', 'Nieuw Saldo'],
+                'Bedrag': [oud_saldo, totaal_inkomen, totaal_uitgaven, nieuw_saldo]
+            }
+        }
+
+        historiek.append(record)
+        herbereken_saldi(historiek)
+        sla_historiek_op(historiek)
+
+        # Controleer budgetten
+        for categorie in uitgaven:
+            if categorie in budgetten:
+                besteed = uitgaven[categorie]
+                budget = budgetten[categorie]
+                if besteed > budget:
+                    messagebox.showwarning("Budget Overschrijding", f"Je hebt het budget overschreden voor {categorie}!")
+                else:
+                    messagebox.showinfo("Budget", f"Je zit binnen het budget voor {categorie}.")
+
+        messagebox.showinfo("Succes", "Nieuwe dag succesvol toegevoegd.")
+        invoer_venster.destroy()
+
+    tk.Button(invoer_venster, text="Opslaan", command=opslaan).pack(pady=10)
+
+def vraag_bedragen_gui(type_bedrag):
+    bedragen_venster = tk.Toplevel()
+    bedragen_venster.title(f"{type_bedrag.capitalize()} Invoeren")
+
+    categorieen = ['Visa en Bank contact', 'Payconiq', 'Open Facturen', 'Cash'] if type_bedrag == "inkomsten" else ['Visa en Bank contact', 'Payconiq', 'Openstaande facturen', 'Betaalde facturen', 'Gestort']
+    entries = {}
+
+    for categorie in categorieen:
+        tk.Label(bedragen_venster, text=categorie).pack()
+        entry = tk.Entry(bedragen_venster)
+        entry.pack()
+        entries[categorie] = entry
+
+    bedragen = {}
+
+    def opslaan_bedragen():
+        for categorie, entry in entries.items():
+            waarde = entry.get()
+            try:
+                bedrag = float(waarde.replace(',', '.')) if waarde else 0.0
+            except ValueError:
+                messagebox.showerror("Fout", f"Ongeldige invoer voor {categorie}.")
+                return
+            bedragen[categorie] = bedrag
+        bedragen_venster.destroy()
+
+    tk.Button(bedragen_venster, text="Opslaan", command=opslaan_bedragen).pack(pady=10)
+
+    bedragen_venster.wait_window()
+    return bedragen
+
+def toon_samenvatting_gui(parent):
+    historiek = laad_historiek()
+    if not historiek:
+        messagebox.showinfo("Samenvatting", "Er zijn nog geen records in de historiek.")
+        return
+
+    totaal_inkomsten = sum(record['Gegevens']['Bedrag'][1] for record in historiek)
+    totaal_uitgaven = sum(record['Gegevens']['Bedrag'][2] for record in historiek)
+    eindsaldo = historiek[-1]['Gegevens']['Bedrag'][3]
+
+    samenvatting = f"Totaal Inkomsten: {totaal_inkomsten}\nTotaal Uitgaven: {totaal_uitgaven}\nEindsaldo: {eindsaldo}"
+    messagebox.showinfo("Samenvatting", samenvatting)
+
+def beheer_instellingen_gui():
+    instellingen_venster = tk.Toplevel()
+    instellingen_venster.title("Instellingen")
+
+    def wijzig_invoerkleur():
+        kleur = simpledialog.askstring("Invoerkleur", "Kies een invoerkleur (green, blue, yellow, red, cyan, white):")
+        if kleur in COLOR_OPTIONS:
+            settings["input_color"] = kleur
+            sla_settings_op()
+            messagebox.showinfo("Succes", f"Invoerkleur aangepast naar {kleur}.")
+        else:
+            messagebox.showerror("Fout", "Ongeldige kleurkeuze.")
+
+    def wijzig_tabelstijl():
+        stijl = simpledialog.askstring("Tabelstijl", f"Kies een tabelstijl ({', '.join(GRID_STYLES)}):")
+        if stijl in GRID_STYLES:
+            settings["grid_style"] = stijl
+            sla_settings_op()
+            messagebox.showinfo("Succes", f"Tabelstijl aangepast naar {stijl}.")
+        else:
+            messagebox.showerror("Fout", "Ongeldige stijlkeuze.")
+
+    def wijzig_titel():
+        nieuwe_titel = simpledialog.askstring("Nieuwe Titel", "Voer nieuwe titel in:")
+        titel_kleur = simpledialog.askstring("Titelkleur", "Kies een kleur voor de titel (green, blue, yellow, red, cyan, white):")
+        if titel_kleur in COLOR_OPTIONS:
+            settings["intro_color"] = titel_kleur
+            settings["intro_title"] = nieuwe_titel
+            sla_settings_op()
+            messagebox.showinfo("Succes", "Titel en kleur aangepast.")
+        else:
+            messagebox.showerror("Fout", "Ongeldige kleurkeuze.")
+
+    tk.Button(instellingen_venster, text="Wijzig Invoerkleur", command=wijzig_invoerkleur).pack(pady=5)
+    tk.Button(instellingen_venster, text="Wijzig Tabelstijl", command=wijzig_tabelstijl).pack(pady=5)
+    tk.Button(instellingen_venster, text="Wijzig Introtitel en Kleur", command=wijzig_titel).pack(pady=5)
+    tk.Button(instellingen_venster, text="Sluiten", command=instellingen_venster.destroy).pack(pady=5)
+
+def exporteer_naar_excel_gui():
+    historiek = laad_historiek()
+    if not historiek:
+        messagebox.showinfo("Exporteren", "Er zijn geen gegevens om te exporteren.")
+        return
+
+    data = []
+    for record in historiek:
+        data.append({
+            'Datum': record['Datum'].strftime('%d-%m-%Y'),
+            'Oud Saldo': record['Gegevens']['Bedrag'][0],
+            'Totaal Inkomsten': record['Gegevens']['Bedrag'][1],
+            'Totaal Uitgaven': record['Gegevens']['Bedrag'][2],
+            'Nieuw Saldo': record['Gegevens']['Bedrag'][3]
+        })
+    df = pd.DataFrame(data)
+
+    bestandsnaam = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel files", "*.xlsx")])
+    if bestandsnaam:
+        try:
+            df.to_excel(bestandsnaam, index=False, engine='openpyxl')
+            messagebox.showinfo("Succes", f"Historiek succesvol geëxporteerd naar {bestandsnaam}.")
+        except ImportError:
+            messagebox.showerror("Fout", "De module 'openpyxl' is niet geïnstalleerd. Installeer deze om naar Excel te exporteren.")
+
+def wijzig_dag_gui(parent):
+    historiek = laad_historiek()
+    if not historiek:
+        messagebox.showinfo("Wijzigen", "Er zijn geen records om te wijzigen.")
+        return
+
+    datum_str = simpledialog.askstring("Wijzigen", "Voer de datum in van de dag die je wilt wijzigen (dd-mm-jjjj):")
+    try:
+        datum = datetime.strptime(datum_str, "%d-%m-%Y").date()
+    except ValueError:
+        messagebox.showerror("Fout", "Ongeldige datum. Gebruik het formaat dd-mm-jjjj.")
+        return
+
+    for index, record in enumerate(historiek):
+        if record["Datum"] == datum:
+            inkomsten = vraag_bedragen_gui("inkomsten")
+            uitgaven = vraag_bedragen_gui("uitgaven")
+
+            totaal_inkomen = sum(inkomsten.values())
+            totaal_uitgaven = sum(uitgaven.values())
+            oud_saldo = historiek[index - 1]['Gegevens']["Bedrag"][3] if index > 0 else 0.0
+            nieuw_saldo = oud_saldo + totaal_inkomen - totaal_uitgaven
+
+            record['Gegevens'] = {
+                'Categorie': ['Oud Saldo', 'Totaal Inkomsten', 'Totaal Uitgaven', 'Nieuw Saldo'],
+                'Bedrag': [oud_saldo, totaal_inkomen, totaal_uitgaven, nieuw_saldo]
+            }
+
+            herbereken_saldi(historiek, start_index=index)
+            sla_historiek_op(historiek)
+
+            messagebox.showinfo("Succes", f"De gegevens voor {datum.strftime('%d-%m-%Y')} zijn bijgewerkt.")
+            return
+
+    messagebox.showerror("Fout", f"Geen gegevens gevonden voor {datum.strftime('%d-%m-%Y')}.")
+
+def verwijder_dag_gui(parent):
+    historiek = laad_historiek()
+    if not historiek:
+        messagebox.showinfo("Verwijderen", "Er zijn geen records om te verwijderen.")
+        return
+
+    datum_str = simpledialog.askstring("Verwijderen", "Voer de datum in van de dag die je wilt verwijderen (dd-mm-jjjj):")
+    try:
+        datum = datetime.strptime(datum_str, "%d-%m-%Y").date()
+    except ValueError:
+        messagebox.showerror("Fout", "Ongeldige datum. Gebruik het formaat dd-mm-jjjj.")
+        return
+
+    for index, record in enumerate(historiek):
+        if record["Datum"] == datum:
+            bevestiging = messagebox.askyesno("Bevestigen", f"Weet je zeker dat je de gegevens voor {datum.strftime('%d-%m-%Y')} wilt verwijderen?")
+            if bevestiging:
+                historiek.pop(index)
+                herbereken_saldi(historiek, start_index=index)
+                sla_historiek_op(historiek)
+                messagebox.showinfo("Succes", "Dag succesvol verwijderd.")
+            else:
+                messagebox.showinfo("Geannuleerd", "Verwijderen geannuleerd.")
+            return
+
+    messagebox.showerror("Fout", f"Geen gegevens gevonden voor {datum.strftime('%d-%m-%Y')}.")
+
+def beheer_budgetten_gui():
+    budgetten_venster = tk.Toplevel()
+    budgetten_venster.title("Budgettering")
+
+    def stel_budget_in():
+        categorie = simpledialog.askstring("Categorie", "Voor welke categorie wil je een budget instellen?")
+        try:
+            bedrag = float(simpledialog.askstring("Bedrag", "Wat is het budgetbedrag?").replace(',', '.'))
+            budgetten[categorie] = bedrag
+            sla_budgetten_op(budgetten)
+            messagebox.showinfo("Succes", "Budget succesvol ingesteld!")
+        except ValueError:
+            messagebox.showerror("Fout", "Ongeldige invoer. Voer een geldig getal in.")
+
+    def toon_budgetten():
+        if not budgetten:
+            messagebox.showinfo("Budgetten", "Er zijn nog geen budgetten ingesteld.")
+            return
+        budgetten_text = "\n".join([f"{cat}: {bedrag}" for cat, bedrag in budgetten.items()])
+        messagebox.showinfo("Budgetten", budgetten_text)
+
+    tk.Button(budgetten_venster, text="Stel een Budget In", command=stel_budget_in).pack(pady=5)
+    tk.Button(budgetten_venster, text="Bekijk Budgetten", command=toon_budgetten).pack(pady=5)
+    tk.Button(budgetten_venster, text="Sluiten", command=budgetten_venster.destroy).pack(pady=5)
+
+def toon_grafiek_gui():
+    historiek = laad_historiek()
+    if not historiek:
+        messagebox.showinfo("Grafiek", "Er zijn geen gegevens om te tonen.")
+        return
+
+    datums = [record['Datum'] for record in historiek]
+    saldi = [record['Gegevens']['Bedrag'][3] for record in historiek]
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(datums, saldi, marker='o')
+    plt.title('Nieuw Saldo over Tijd')
+    plt.xlabel('Datum')
+    plt.ylabel('Saldo')
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.show()
+
+if __name__ == "__main__":
+    start_gui()
